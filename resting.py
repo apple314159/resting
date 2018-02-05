@@ -22,6 +22,12 @@ import xml.etree.ElementTree as ET
 import requests
 from requests_toolbelt.multipart.encoder import MultipartEncoder
 
+try:
+    from bs4 import BeautifulSoup
+except ImportError:
+    def BeautifulSoup(**kw):
+        return None
+
 from future.utils import iteritems
 from past.builtins import basestring
 
@@ -173,13 +179,15 @@ def run_test_case(filename, env):
                     for fl in formlist:
                         for f, v in iteritems(fl):
                             if isinstance(v, list):
-                                fields[f] = (v[0], file(v[0],"rb"), v[1])
+                                fields[f] = (v[0], open(v[0],"rb"), v[1])
                             else:
                                 fields[f] = v
                     if fields:
                         payload = MultipartEncoder( fields=fields )
                         hdrs['Content-Type'] = payload.content_type
 
+            if not step.get("cookies", True):
+                s.cookies.clear()
             url = step.get("url", step.get("apiUrl"))
             try:
                 r = s.request(step["method"], url,
@@ -194,16 +202,20 @@ def run_test_case(filename, env):
 
             rjson = None
             rxml = None
-            if r.headers['content-type'][:16] == "application/json":
-                try:
-                    rjson = r.json()
-                except ValueError as e:
-                    pass
-            else: #if r.headers['content-type'][:16] == "text/xml":
-                try:
-                    rxml = ET.fromstring(r.content)
-                except ET.ParseError as e:
-                    pass
+            soup = None
+            if 'content-type' in r.headers:
+                if r.headers['content-type'][:16] == "application/json":
+                    try:
+                        rjson = r.json()
+                    except ValueError as e:
+                        pass
+                elif r.headers['content-type'][:9] == "text/html":
+                    soup = BeautifulSoup(r.text, 'lxml')
+                elif r.headers['content-type'][:8] == "text/xml":
+                    try:
+                        rxml = ET.fromstring(r.content)
+                    except ET.ParseError as e:
+                        pass
             if step.get("asserts",None) != None:
                 o = step["asserts"].get("headers",None)
                 if o != None:
@@ -221,7 +233,7 @@ def run_test_case(filename, env):
                     if o.get("exec",None) != None:
                         cmd = o.get("exec",None)
                         try:
-                            ns = {"execErr": None, "r": r, "recv_json": rjson, "rjson": rjson, "rxml": rxml}
+                            ns = {"execErr": None, "r": r, "recv_json": rjson, "rjson": rjson, "rxml": rxml, "soup": soup}
                             exec(cmd, globals(), ns)
                         except ValueError as e:
                             print('Failed to exec "%s": %s'%(cmd,e))
